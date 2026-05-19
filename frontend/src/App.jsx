@@ -37,6 +37,13 @@ import {
   Sparkles,
   RotateCcw,
   Trash2,
+  Upload,
+  Lock,
+  Unlock,
+  ZoomIn,
+  ZoomOut,
+  Save,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { DndContext, closestCenter } from '@dnd-kit/core';
@@ -113,8 +120,90 @@ const MACHINE_META = {
 
 const DEFAULT_MACHINE_ORDER = Object.keys(MACHINE_META);
 const STATUS_WEIGHT = { Critical: 4, Warning: 3, Unknown: 2, Normal: 1 };
+const STATUS_PRIORITY = {
+  Critical: 100,
+  Warning: 60,
+  Normal: 20,
+  Unknown: 10,
+};
+
+const CRITICALITY_WEIGHT = {
+  High: 35,
+  Medium: 20,
+  Low: 10,
+};
+function buildSmartAlarm(machine, meta) {
+  const severity = Number(machine.severity_score || 0);
+
+  const statusWeight = STATUS_PRIORITY[machine.ai_status] || 0;
+  const criticalityWeight = CRITICALITY_WEIGHT[meta.criticality] || 0;
+
+  const anomalyBoost = machine.anomaly_detected ? 25 : 0;
+
+  const vibrationRisk = Number(machine.vibration || 0) > 5 ? 15 : 0;
+  const thermalRisk = Number(machine.temperature || 0) > 85 ? 15 : 0;
+
+  const escalationProbability = Math.min(
+    100,
+    Math.round(
+      severity * 0.45 +
+      vibrationRisk +
+      thermalRisk +
+      anomalyBoost
+    )
+  );
+const priorityScore = Math.min(
+    100,
+    Math.round(
+      severity * 0.5 +
+      statusWeight * 0.2 +
+      criticalityWeight * 0.2 +
+      escalationProbability * 0.1
+    )
+  );
+
+  let urgency = 'Informational';
+
+  if (priorityScore >= 85) urgency = 'Immediate';
+  else if (priorityScore >= 70) urgency = 'Escalating';
+  else if (priorityScore >= 45) urgency = 'Warning';
+
+  const estimatedFailureWindow =
+    priorityScore >= 90
+      ? '5-10 minutes'
+      : priorityScore >= 75
+      ? '10-20 minutes'
+      : priorityScore >= 60
+      ? '20-45 minutes'
+      : 'Stable';
+      const rootCause =
+    machine.copilot?.failure_mode ||
+    machine.anomaly_source ||
+    'Unknown anomaly source';
+
+  return {
+    ...machine,
+    priorityScore,
+    escalationProbability,
+    urgency,
+    estimatedFailureWindow,
+    rootCause,
+    aiConfidence: Math.min(99, escalationProbability + 5),
+  };
+}
 const STORAGE_KEY_VIRTUAL_ASSETS = 'nexusVirtualMachines';
 const STORAGE_KEY_MAP_NODE_SETTINGS = 'nexusMapNodeSettings';
+const STORAGE_KEY_MAP_WORKSPACE = 'nexusMapWorkspace';
+
+const DEFAULT_MAP_WORKSPACE = {
+  backgroundUrl: '',
+  backgroundName: '',
+  gridVisible: true,
+  layoutLocked: false,
+  zoom: 1,
+  panX: 0,
+  panY: 0,
+};
 
 const MACHINE_TYPES = {
   Pump: {
@@ -266,6 +355,30 @@ function saveMapNodeSettings(settings) {
   }
 }
 
+function getSavedMapWorkspace() {
+  if (typeof window === 'undefined') return DEFAULT_MAP_WORKSPACE;
+
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY_MAP_WORKSPACE) || '{}');
+    return {
+      ...DEFAULT_MAP_WORKSPACE,
+      ...(saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {}),
+    };
+  } catch {
+    return DEFAULT_MAP_WORKSPACE;
+  }
+}
+
+function saveMapWorkspace(settings) {
+  if (typeof window === 'undefined') return;
+
+  try {
+    window.localStorage.setItem(STORAGE_KEY_MAP_WORKSPACE, JSON.stringify(settings));
+  } catch {
+    // Custom map backgrounds can exceed local storage in some browsers.
+  }
+}
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -312,21 +425,21 @@ function createVirtualMachine(count, type = 'Pump') {
 function generateVirtualTelemetry(asset, now = Date.now()) {
   const profile = MACHINE_TYPES[asset.type] || MACHINE_TYPES.Pump;
   const age = Math.max((now - asset.createdAt) / 1000, 0);
-  const wave = Math.sin(age / profile.period + asset.phase);
-  const secondary = Math.cos(age / (profile.period * 0.55) + asset.phase * 1.7);
-  const riskPulse = Math.max(0, Math.sin(age / 31 + asset.phase * 2.4) - 0.72) * asset.riskBias;
-  const noise = () => (Math.random() - 0.5);
+  const wave = Math.sin(age / (profile.period * 2.2) + asset.phase);
+  const secondary = Math.cos(age / (profile.period * 1.8) + asset.phase * 1.7);
+  const riskPulse = Math.max(0, Math.sin(age / 95 + asset.phase * 2.4) - 0.74) * asset.riskBias;
+  const noise = () => Math.sin(age * 0.37 + asset.phase * 3.1) * 0.5;
 
-  const temperature = profile.baseTemp * (1 + wave * 0.045 + secondary * 0.018 + riskPulse * 0.34) + noise() * 1.2;
-  const pressure = Math.max(0.1, profile.basePressure * (1 + secondary * 0.05 + wave * 0.018 + riskPulse * 0.28) + noise() * 2.6);
-  const vibration = Math.max(0.05, profile.baseVibration * (1 + wave * 0.08 + riskPulse * 0.95) + noise() * 0.12);
+  const temperature = profile.baseTemp * (1 + wave * 0.028 + secondary * 0.012 + riskPulse * 0.24) + noise() * 0.45;
+  const pressure = Math.max(0.1, profile.basePressure * (1 + secondary * 0.03 + wave * 0.012 + riskPulse * 0.2) + noise() * 0.9);
+  const vibration = Math.max(0.05, profile.baseVibration * (1 + wave * 0.05 + riskPulse * 0.62) + noise() * 0.04);
 
   const tempDev = Math.abs(temperature - profile.baseTemp) / Math.max(profile.baseTemp, 1);
   const pressureDev = Math.abs(pressure - profile.basePressure) / Math.max(profile.basePressure, 1);
   const vibrationDev = Math.abs(vibration - profile.baseVibration) / Math.max(profile.baseVibration, 0.2);
   const maxDev = Math.max(tempDev, pressureDev, vibrationDev);
-  const severityScore = Math.max(4, Math.min(96, Math.round(maxDev * 175 + riskPulse * 52 + asset.drift * 8)));
-  const aiStatus = severityScore > 72 ? 'Critical' : severityScore > 42 ? 'Warning' : 'Normal';
+  const severityScore = Math.max(4, Math.min(96, Math.round(maxDev * 155 + riskPulse * 44 + asset.drift * 6)));
+  const aiStatus = severityScore > 82 ? 'Critical' : severityScore > 56 ? 'Warning' : 'Normal';
   const anomalySource = maxDev === tempDev ? 'temperature' : maxDev === vibrationDev ? 'vibration' : 'pressure';
 
   return {
@@ -738,6 +851,10 @@ function FloorPlan({
   nodeSettings = {},
   selectedNodeId,
   setSelectedNodeId,
+  mapWorkspace,
+  onMapWorkspaceChange,
+  onMapBackgroundUpload,
+  onSaveLayout,
   onNodeMove,
   onNodeSettingChange,
   onResetNode,
@@ -746,6 +863,9 @@ function FloorPlan({
   const stageRef = useRef(null);
   const dragRef = useRef(null);
   const draggedNodeRef = useRef(null);
+  const zoom = clamp(toNumber(mapWorkspace.zoom, 1), 0.6, 2.8);
+  const gridVisible = mapWorkspace.gridVisible !== false;
+  const layoutLocked = Boolean(mapWorkspace.layoutLocked);
   const activeMode = MAP_MODES.find((mode) => mode.key === mapLayer) || MAP_MODES[0];
   const activeLayout = activeMode.layout || mapLayout || 'ecosystem';
   const layout = MAP_LAYOUTS[activeLayout] || MAP_LAYOUTS.ecosystem;
@@ -763,9 +883,11 @@ function FloorPlan({
   };
 
   const handlePointerDown = (event, machine) => {
-    if (role !== 'engineer') return;
+    const settings = nodeSettings[machine.id] || {};
+    if (role !== 'engineer' || layoutLocked || settings.locked) return;
     const rect = stageRef.current?.getBoundingClientRect();
     if (!rect) return;
+    event.stopPropagation();
     event.currentTarget.setPointerCapture?.(event.pointerId);
     setSelectedNodeId(machine.id);
     dragRef.current = {
@@ -778,14 +900,15 @@ function FloorPlan({
   };
 
   const handlePointerMove = (event) => {
-    if (role !== 'engineer' || !dragRef.current) return;
+    if (role !== 'engineer' || layoutLocked || !dragRef.current) return;
     const drag = dragRef.current;
+    if (nodeSettings[drag.id]?.locked) return;
     const distance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
     if (distance < 4) return;
     drag.moved = true;
     draggedNodeRef.current = drag.id;
-    const cx = clamp(((event.clientX - drag.rect.left) / drag.rect.width) * 100, 8, 92);
-    const cy = clamp(((event.clientY - drag.rect.top) / drag.rect.height) * 100, 12, 88);
+    const cx = clamp(((event.clientX - drag.rect.left) / drag.rect.width) * 100, 4, 96);
+    const cy = clamp(((event.clientY - drag.rect.top) / drag.rect.height) * 100, 6, 94);
     onNodeMove(drag.id, {
       cx: Number(cx.toFixed(1)),
       cy: Number(cy.toFixed(1)),
@@ -796,13 +919,28 @@ function FloorPlan({
     dragRef.current = null;
   };
 
+  const handleStagePointerUp = () => {
+    handlePointerUp();
+  };
+
+  const setZoom = (nextZoom) => {
+    onMapWorkspaceChange({ zoom: Number(clamp(nextZoom, 0.6, 2.8).toFixed(2)) });
+  };
+
+  const resetView = () => {
+    onMapWorkspaceChange({ zoom: 1, panX: 0, panY: 0 });
+  };
+
   return (
-    <div className={`floor-plan premium-map operations-map map-${activeLayout} layer-${mapLayer} ${role === 'engineer' ? 'engineer-map' : ''}`}>
+    <div className={`floor-plan premium-map operations-map map-${activeLayout} layer-${mapLayer} ${role === 'engineer' ? 'engineer-map' : ''} ${layoutLocked ? 'layout-locked' : ''} ${gridVisible ? 'grid-visible' : 'grid-hidden'} ${mapWorkspace.backgroundUrl ? 'has-custom-bg' : ''}`}>
       <div className="map-commandbar">
         <div>
           <p className="floor-kicker">Digital Twin / Command Map</p>
           <h3>{activeMode.label}</h3>
-          <p className="floor-subtitle">{activeMode.description}</p>
+          <p className="floor-subtitle">
+            {mapWorkspace.backgroundName ? `${mapWorkspace.backgroundName} / ` : ''}
+            {activeMode.description}
+          </p>
         </div>
         <div className="floor-toolbar-stack">
           <div className="map-mode-row" aria-label="Map mode">
@@ -821,42 +959,103 @@ function FloorPlan({
               );
             })}
           </div>
+          <div className="map-option-row compact map-stage-controls">
+            {role === 'engineer' && (
+              <>
+                <label className="map-option upload-option">
+                  <Upload size={14} />
+                  Upload Map
+                  <input type="file" accept="image/*" onChange={onMapBackgroundUpload} />
+                </label>
+                <button
+                  type="button"
+                  className={`map-option ${layoutLocked ? 'active' : ''}`}
+                  onClick={() => onMapWorkspaceChange({ layoutLocked: !layoutLocked })}
+                >
+                  {layoutLocked ? <Lock size={14} /> : <Unlock size={14} />}
+                  {layoutLocked ? 'Locked' : 'Unlocked'}
+                </button>
+                <button type="button" className="map-option" onClick={onSaveLayout}>
+                  <Save size={14} />
+                  Save Layout
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              className={`map-option ${gridVisible ? 'active' : ''}`}
+              onClick={() => onMapWorkspaceChange({ gridVisible: !gridVisible })}
+            >
+              <Grid size={14} />
+              Grid
+            </button>
+          </div>
         </div>
       </div>
 
-      <div ref={stageRef} className="map-stage" role="img" aria-label={`${layout.label} plant map`}>
-        <div className="map-grid-layer" />
-        {activeLayout === 'ecosystem' ? (
-          <div className="ecosystem-lanes" aria-hidden="true">
-            {ECOSYSTEM_COLUMNS.map((column, index) => (
-              <section key={column.key} className="map-lane" style={{ '--lane': index }}>
-                <span className="lane-index">0{index + 1}</span>
-                <strong>{column.label}</strong>
-                <em>{column.subtitle}</em>
-              </section>
-            ))}
-          </div>
-        ) : (
-          <div className="zone-plates" aria-hidden="true">
-            {['A', 'B', 'C', 'D'].map((zone) => (
-              <div key={zone} className={`zone-plate zone-${zone.toLowerCase()}`}>
-                <span>Zone {zone}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="map-flow-network" aria-hidden="true">
-          <span className="flow-line flow-primary" />
-          <span className="flow-line flow-branch flow-branch-a" />
-          <span className="flow-line flow-branch flow-branch-b" />
-          <span className="flow-pulse pulse-one" />
-          <span className="flow-pulse pulse-two" />
+      <div
+        ref={stageRef}
+        className="map-stage"
+        role="img"
+        aria-label={`${layout.label} plant map`}
+        onPointerUp={handleStagePointerUp}
+        onPointerCancel={handleStagePointerUp}
+      >
+        <div className="map-stage-hud map-stage-controls">
+          <span><Eye size={13} /> Full view</span>
+          <button type="button" onClick={() => setZoom(zoom - 0.16)} aria-label="Zoom out"><ZoomOut size={14} /></button>
+          <strong>{Math.round(zoom * 100)}%</strong>
+          <button type="button" onClick={() => setZoom(zoom + 0.16)} aria-label="Zoom in"><ZoomIn size={14} /></button>
+          <button type="button" onClick={resetView} aria-label="Reset map view"><RotateCcw size={14} /></button>
         </div>
 
-        {telemetry.map((machine, index) => {
+        <div
+          className="map-viewport"
+          style={{
+            transform: `scale(${zoom})`,
+          }}
+        >
+          {mapWorkspace.backgroundUrl ? (
+            <div className="map-background-image" style={{ backgroundImage: `url(${mapWorkspace.backgroundUrl})` }} />
+          ) : (
+            <div className="map-background-empty">
+              <ImageIcon size={34} />
+              <span>Upload plant background map</span>
+            </div>
+          )}
+          <div className="map-grid-layer" />
+          {activeLayout === 'ecosystem' ? (
+            <div className="ecosystem-lanes" aria-hidden="true">
+              {ECOSYSTEM_COLUMNS.map((column, index) => (
+                <section key={column.key} className="map-lane" style={{ '--lane': index }}>
+                  <span className="lane-index">0{index + 1}</span>
+                  <strong>{column.label}</strong>
+                  <em>{column.subtitle}</em>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <div className="zone-plates" aria-hidden="true">
+              {['A', 'B', 'C', 'D'].map((zone) => (
+                <div key={zone} className={`zone-plate zone-${zone.toLowerCase()}`}>
+                  <span>Zone {zone}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="map-flow-network" aria-hidden="true">
+            <span className="flow-line flow-primary" />
+            <span className="flow-line flow-branch flow-branch-a" />
+            <span className="flow-line flow-branch flow-branch-b" />
+            <span className="flow-pulse pulse-one" />
+            <span className="flow-pulse pulse-two" />
+          </div>
+
+          {telemetry.map((machine, index) => {
           const meta = getMeta(machine.id, metaRegistry);
           const settings = nodeSettings[machine.id] || {};
+          const nodeLocked = layoutLocked || Boolean(settings.locked);
           const defaultCoords = getMapCoords(machine, meta, index, activeLayout);
           const coords = {
             cx: toNumber(settings.cx, defaultCoords.cx),
@@ -874,14 +1073,15 @@ function FloorPlan({
               : `Risk ${severity}/100`;
 
           return (
-            <button
+            <div
               key={machine.id}
-              type="button"
-              className={`map-node-card tone-${tone} size-${settings.size || 'medium'} accent-${settings.accent || 'auto'} ${selectedNodeId === machine.id ? 'selected' : ''} ${machine.synthetic ? 'synthetic' : ''}`}
+              role="button"
+              tabIndex={0}
+              className={`map-node-card tone-${tone} size-${settings.size || 'medium'} accent-${settings.accent || 'auto'} ${selectedNodeId === machine.id ? 'selected' : ''} ${machine.synthetic ? 'synthetic' : ''} ${nodeLocked ? 'node-locked' : ''}`}
               style={{ '--node-x': `${coords.cx}%`, '--node-y': `${coords.cy}%`, '--node-risk': severity }}
               onPointerDown={(event) => handlePointerDown(event, machine)}
               onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
+              onPointerUp={handleStagePointerUp}
               onClick={(event) => {
                 if (draggedNodeRef.current === machine.id) {
                   event.preventDefault();
@@ -894,7 +1094,31 @@ function FloorPlan({
                   onNodeClick(machine.id);
                 }
               }}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                event.preventDefault();
+                if (role === 'engineer') {
+                  setSelectedNodeId(machine.id);
+                } else {
+                  onNodeClick(machine.id);
+                }
+              }}
             >
+              {role === 'engineer' && (
+                <button
+                  type="button"
+                  className="node-lock-btn"
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onNodeSettingChange(machine.id, { locked: !settings.locked });
+                    setSelectedNodeId(machine.id);
+                  }}
+                  aria-label={`${settings.locked ? 'Unlock' : 'Lock'} ${meta.shortLabel}`}
+                >
+                  {settings.locked ? <Lock size={12} /> : <Unlock size={12} />}
+                </button>
+              )}
               <span className="node-orbit" />
               <span className="node-topline">
                 <span className="node-dot" />
@@ -906,9 +1130,10 @@ function FloorPlan({
               </span>
               <span className="node-layer-value">{layerValue}</span>
               <span className="node-anomaly">{anomaly}</span>
-            </button>
+            </div>
           );
-        })}
+          })}
+        </div>
 
         {role === 'engineer' && (
           <aside className="node-studio" aria-label="Engineer node settings">
@@ -971,6 +1196,18 @@ function FloorPlan({
                 </div>
 
                 <div className="node-setting-row">
+                  <span>Component Lock</span>
+                  <button
+                    type="button"
+                    className={`node-command inline-lock ${selectedSettings.locked ? 'danger' : 'secondary'}`}
+                    onClick={() => onNodeSettingChange(selectedMachine.id, { locked: !selectedSettings.locked })}
+                  >
+                    {selectedSettings.locked ? <Lock size={14} /> : <Unlock size={14} />}
+                    {selectedSettings.locked ? 'Locked' : 'Unlocked'}
+                  </button>
+                </div>
+
+                <div className="node-setting-row">
                   <span>Accent</span>
                   <div className="color-swatch-row">
                     {['auto', 'blue', 'teal', 'amber', 'red'].map((accent) => (
@@ -1005,7 +1242,11 @@ function FloorPlan({
                 </div>
               </>
             ) : (
-              <p className="node-studio-empty">Engineer mode lets you drag machine pills, resize them, recolor them, and control machine state from here.</p>
+              <p className="node-studio-empty">
+                {layoutLocked
+                  ? 'Layout is locked. Unlock editing to move machine pills or tune their display.'
+                  : 'Engineer mode lets you drag machine pills, resize them, recolor them, and control machine state from here.'}
+              </p>
             )}
           </aside>
         )}
@@ -1019,6 +1260,8 @@ function FloorPlan({
         <strong>{activeCount} active</strong>
         <strong>{criticalCount} critical</strong>
         <strong>{warningCount} warning</strong>
+        <strong>{layoutLocked ? 'layout locked' : 'layout editable'}</strong>
+        {mapWorkspace.backgroundName && <strong>custom map active</strong>}
         {role === 'engineer' && <strong>{simulatedCount} simulated</strong>}
       </div>
     </div>
@@ -1076,6 +1319,53 @@ function TrendChart({ title, data, dataKey, stroke, unit, domain }) {
   );
 }
 
+function HmiSelect({ icon: Icon, value, options, onChange, ariaLabel }) {
+  const [open, setOpen] = useState(false);
+  const selected = options.find((option) => option.value === value) || options[0];
+
+  return (
+    <div
+      className={`hmi-select ${open ? 'open' : ''}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) {
+          setOpen(false);
+        }
+      }}
+    >
+      <button
+        type="button"
+        className="hmi-select-trigger"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <Icon size={15} />
+        <span>{selected.label}</span>
+      </button>
+      {open && (
+        <div className="hmi-select-menu" role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              className={option.value === value ? 'selected' : ''}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [telemetry, setTelemetry] = useState([]);
   const [virtualMachines, setVirtualMachines] = useState(() => getSavedVirtualMachines());
@@ -1088,6 +1378,7 @@ export default function App() {
   const [mapLayout, setMapLayout] = useState('ecosystem');
   const [mapLayer, setMapLayer] = useState('risk');
   const [mapNodeSettings, setMapNodeSettings] = useState(() => getSavedMapNodeSettings());
+  const [mapWorkspace, setMapWorkspace] = useState(() => getSavedMapWorkspace());
   const [selectedMapNodeId, setSelectedMapNodeId] = useState(null);
   const [acknowledged, setAcknowledged] = useState(new Set());
   const [investigateId, setInvestigateId] = useState(null);
@@ -1099,6 +1390,7 @@ export default function App() {
   const [showAcknowledged, setShowAcknowledged] = useState(true);
   const [clock, setClock] = useState(new Date());
   const [newMachineType, setNewMachineType] = useState('Pump');
+  const lastTelemetryCommitRef = useRef(0);
 
   useEffect(() => {
     document.title = 'Nexus Control System';
@@ -1116,6 +1408,10 @@ export default function App() {
   useEffect(() => {
     saveMapNodeSettings(mapNodeSettings);
   }, [mapNodeSettings]);
+
+  useEffect(() => {
+    saveMapWorkspace(mapWorkspace);
+  }, [mapWorkspace]);
 
   useEffect(() => {
     const pushVirtualTick = () => {
@@ -1143,7 +1439,7 @@ export default function App() {
     };
 
     pushVirtualTick();
-    const interval = window.setInterval(pushVirtualTick, 2000);
+    const interval = window.setInterval(pushVirtualTick, 6000);
     return () => window.clearInterval(interval);
   }, [virtualMachines, virtualShutdowns]);
 
@@ -1152,6 +1448,9 @@ export default function App() {
     socket.on('disconnect', () => setConnected(false));
 
     socket.on('telemetry', (data) => {
+      const now = Date.now();
+      if (now - lastTelemetryCommitRef.current < 3500) return;
+      lastTelemetryCommitRef.current = now;
       setTelemetry(data);
       setTelemetryHistory((prev) => appendTelemetryHistory(prev, data));
     });
@@ -1270,17 +1569,31 @@ export default function App() {
     [filteredMachineIds, machineMap],
   );
 
-  const actionableItems = useMemo(
-    () => allTelemetry
-      .filter((item) => (item.ai_status === 'Warning' || item.ai_status === 'Critical') && !item.isShutdown)
-      .sort((a, b) => toNumber(b.severity_score) - toNumber(a.severity_score)),
-    [allTelemetry],
-  );
+  const actionableItems = useMemo(() => {
+  return allTelemetry
+    .filter(
+      (item) =>
+        (item.ai_status === 'Warning' || item.ai_status === 'Critical') &&
+        !item.isShutdown
+    )
+    .map((item) => {
+      const meta = getMeta(item.id, machineMeta);
+      return buildSmartAlarm(item, meta);
+    })
+    .sort((a, b) => b.priorityScore - a.priorityScore);
+}, [allTelemetry, machineMeta]);
 
   const activeAlerts = useMemo(
     () => actionableItems.filter((item) => !acknowledged.has(item.id)),
     [acknowledged, actionableItems],
   );
+  const suppressedAlerts = useMemo(() => {
+  return actionableItems.filter(
+    (item) =>
+      item.priorityScore < 45 ||
+      item.urgency === 'Informational'
+  );
+}, [actionableItems]);
   const ackAlerts = useMemo(
     () => actionableItems.filter((item) => acknowledged.has(item.id)),
     [acknowledged, actionableItems],
@@ -1348,6 +1661,52 @@ export default function App() {
       },
     }));
   }, []);
+
+  const handleMapWorkspaceChange = useCallback((patch) => {
+    setMapWorkspace((prev) => ({
+      ...prev,
+      ...patch,
+    }));
+  }, []);
+
+  const handleMapBackgroundUpload = useCallback((event) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !file.type.startsWith('image/')) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setMapWorkspace((prev) => ({
+        ...prev,
+        backgroundUrl: String(reader.result || ''),
+        backgroundName: file.name,
+        zoom: 1,
+        panX: 0,
+        panY: 0,
+      }));
+      setViewMode('map');
+      setCommandLog((prev) => [{
+        id: `${Date.now()}-map-upload`,
+        machineId: 'Plant map',
+        action: 'uploaded',
+        status: 'saved',
+        timestamp: new Date().toISOString(),
+      }, ...prev].slice(0, 7));
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  const handleSaveMapLayout = useCallback(() => {
+    saveMapNodeSettings(mapNodeSettings);
+    saveMapWorkspace(mapWorkspace);
+    setCommandLog((prev) => [{
+      id: `${Date.now()}-layout-save`,
+      machineId: 'Digital twin',
+      action: 'saved',
+      status: 'saved',
+      timestamp: new Date().toISOString(),
+    }, ...prev].slice(0, 7));
+  }, [mapNodeSettings, mapWorkspace]);
 
   const handleResetMapNode = useCallback((id) => {
     setMapNodeSettings((prev) => {
@@ -1492,7 +1851,15 @@ export default function App() {
           {commandLog.length > 0 && (
             <div className="command-toast">
               <Zap size={12} />
-              <span>{commandLog[0].machineId} {commandLog[0].action === 'shutdown' ? 'shutdown executed' : 'restarted'}</span>
+              <span>
+                {commandLog[0].machineId} {
+                  commandLog[0].action === 'shutdown'
+                    ? 'shutdown executed'
+                    : commandLog[0].action === 'restart'
+                      ? 'restarted'
+                      : commandLog[0].action
+                }
+              </span>
             </div>
           )}
 
@@ -1571,27 +1938,33 @@ export default function App() {
               />
             </label>
 
-            <label className="select-field">
-              <Filter size={15} />
-              <select value={machineFilter} onChange={(event) => setMachineFilter(event.target.value)} aria-label="Filter machines by status">
-                <option value="all">All statuses</option>
-                <option value="critical">Critical</option>
-                <option value="warning">Warning</option>
-                <option value="normal">Normal</option>
-                <option value="offline">Offline</option>
-                <option value="unknown">Unknown</option>
-              </select>
-            </label>
+            <HmiSelect
+              icon={Filter}
+              value={machineFilter}
+              onChange={setMachineFilter}
+              ariaLabel="Filter machines by status"
+              options={[
+                { value: 'all', label: 'All statuses' },
+                { value: 'critical', label: 'Critical' },
+                { value: 'warning', label: 'Warning' },
+                { value: 'normal', label: 'Normal' },
+                { value: 'offline', label: 'Offline' },
+                { value: 'unknown', label: 'Unknown' },
+              ]}
+            />
 
-            <label className="select-field">
-              <ArrowUpDown size={15} />
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value)} aria-label="Sort machines">
-                <option value="layout">Layout order</option>
-                <option value="severity">Severity</option>
-                <option value="status">Status</option>
-                <option value="zone">Zone</option>
-              </select>
-            </label>
+            <HmiSelect
+              icon={ArrowUpDown}
+              value={sortMode}
+              onChange={setSortMode}
+              ariaLabel="Sort machines"
+              options={[
+                { value: 'layout', label: 'Layout order' },
+                { value: 'severity', label: 'Severity' },
+                { value: 'status', label: 'Status' },
+                { value: 'zone', label: 'Zone' },
+              ]}
+            />
           </div>
 
           {role === 'engineer' && (
@@ -1707,6 +2080,10 @@ export default function App() {
               nodeSettings={mapNodeSettings}
               selectedNodeId={selectedMapNodeId}
               setSelectedNodeId={setSelectedMapNodeId}
+              mapWorkspace={mapWorkspace}
+              onMapWorkspaceChange={handleMapWorkspaceChange}
+              onMapBackgroundUpload={handleMapBackgroundUpload}
+              onSaveLayout={handleSaveMapLayout}
               onNodeMove={handleMapNodeMove}
               onNodeSettingChange={handleMapNodeSettingChange}
               onResetNode={handleResetMapNode}
@@ -1739,7 +2116,39 @@ export default function App() {
               </div>
             )}
           </div>
+          {activeAlerts.length > 0 && (
+  <div className="top-risk-panel">
+    <div className="top-risk-header">
+      <ShieldAlert size={18} />
+      <div>
+        <h3>Top Immediate Risks</h3>
+        <p>AI-prioritized operational threats</p>
+      </div>
+    </div>
 
+    <div className="top-risk-list">
+      {activeAlerts.slice(0, 3).map((risk) => (
+        <div key={risk.id} className="top-risk-item">
+          <div>
+            <strong>{risk.id}</strong>
+            <p>{risk.rootCause}</p>
+          </div>
+
+          <div className="risk-meta">
+            <span>{risk.aiConfidence}% confidence</span>
+            <span>{risk.estimatedFailureWindow}</span>
+          </div>
+        </div>
+        ))}
+    </div>
+  </div>
+)}
+{suppressedAlerts.length > 0 && (
+  <div className="suppression-banner">
+    <ShieldAlert size={14} />
+    Suppressed {suppressedAlerts.length} low-priority cascading alarms
+  </div>
+)}
           <div className="alerts-container">
             {activeAlerts.length === 0 ? (
               <div className="empty-state alerts-empty">
@@ -1764,7 +2173,24 @@ export default function App() {
                           <span className="anomaly-source-tag">{item.anomaly_source}</span>
                         )}
                       </div>
-                      <p className="alert-desc">Zone {meta.zone} / {meta.label} / {statusCopy[item.ai_status]}</p>
+                     <div>
+  <p className="alert-desc">
+    Zone {meta.zone} / {meta.label} / {statusCopy[item.ai_status]}
+  </p>
+
+  <div className="ai-alert-intel">
+    <span>Urgency: {item.urgency}</span>
+    <span>Escalation Risk: {item.escalationProbability}%</span>
+    <span>Failure Window: {item.estimatedFailureWindow}</span>
+  </div>
+</div>
+                     {item.rootCause && (
+  <div className="root-cause-box">
+    <Brain size={12} />
+    <span>Root Cause: {item.rootCause}</span>
+  </div>
+)}
+
                       {item.copilot && (
                         <div className="copilot-mini">
                           <Brain size={12} className="copilot-mini-icon" />
@@ -1774,7 +2200,7 @@ export default function App() {
                     </div>
 
                     <div className="severity-box">
-                      <div className="severity-number">{toNumber(item.severity_score)}</div>
+                      <div className="severity-number">{item.priorityScore}</div>
                       <div className="severity-label">/ 100</div>
                     </div>
                   </div>
@@ -1844,7 +2270,19 @@ export default function App() {
                   <span className={`log-dot ${entry.action === 'shutdown' ? 'critical' : 'normal'}`} />
                   <div>
                     <strong>{entry.machineId}</strong>
-                    <p>{entry.action === 'shutdown' ? 'Shutdown executed' : 'Restart completed'} / {formatTime(entry.timestamp)}</p>
+                    <p>
+                      {entry.action === 'shutdown'
+                        ? 'Shutdown executed'
+                        : entry.action === 'restart'
+                          ? 'Restart completed'
+                          : entry.action === 'uploaded'
+                            ? 'Background map uploaded'
+                            : entry.action === 'saved'
+                              ? 'Layout saved'
+                              : entry.action}
+                      {' / '}
+                      {formatTime(entry.timestamp)}
+                    </p>
                   </div>
                 </div>
               ))}
